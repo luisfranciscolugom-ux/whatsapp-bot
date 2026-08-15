@@ -7,20 +7,16 @@ const fs = require('fs');
 
 let qrActual = '';
 
-// Servidor web con refresco de 30 segundos para ver el QR grande y cómodo
 const server = http.createServer(async (req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     if (!qrActual) {
-        return res.end('<h2>¡Bot conectado correctamente! Ya puedes cerrar esta pestaña.</h2>');
+        return res.end('<h2>¡Bot conectado y enfocado en Recargas Nexus!</h2>');
     }
     try {
         const qrImage = await QRCode.toDataURL(qrActual);
         res.end(`
             <html>
-                <head>
-                    <meta http-equiv="refresh" content="30">
-                    <title>QR Bot WhatsApp</title>
-                </head>
+                <head><meta http-equiv="refresh" content="30"><title>QR Bot WhatsApp</title></head>
                 <body style="display:flex;justify-content:center;align-items:center;height:100vh;flex-direction:column;font-family:sans-serif;background:#111;color:#fff;">
                     <h2>Escanea este QR con tu WhatsApp:</h2>
                     <img src="${qrImage}" style="width:300px;height:300px;background:#fff;padding:10px;border-radius:10px;"/>
@@ -41,6 +37,9 @@ server.listen(PORT, '0.0.0.0', () => {
 const MI_ID_JUGADOR = '1248591792';
 const URL_REDIMIR = 'https://recargasnexus.net/redimir/';
 
+// Canal oficial de Recargas Nexus ya configurado con su ID correcto
+const CANAL_NEXUS_JID = '0029Vb2cjk5B4hdL1FMLfW0W@newsletter'; 
+
 function resolveChromeExecutable() {
     return process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/google-chrome';
 }
@@ -48,7 +47,6 @@ function resolveChromeExecutable() {
 async function startBot() {
     const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
     
-    // Simulando ser una Mac para evitar bloqueos
     const sock = makeWASocket({
         auth: state,
         logger: pino({ level: 'silent' }),
@@ -59,18 +57,16 @@ async function startBot() {
 
     sock.ev.on('connection.update', (update) => {
         const { connection, lastDisconnect, qr } = update;
-        
         if (qr) {
             qrActual = qr;
             console.log('Nuevo QR generado. Ábrelo en la URL de tu Render.');
         }
-
         if (connection === 'close') {
             const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
             if (shouldReconnect) startBot();
         } else if (connection === 'open') {
             qrActual = '';
-            console.log('¡Bot conectado exitosamente y listo para cazar PINs!');
+            console.log('¡Bot conectado y vigilando EXCLUSIVAMENTE el canal de Recargas Nexus!');
         }
     });
 
@@ -78,11 +74,19 @@ async function startBot() {
         const msg = messages[0];
         if (!msg.message || msg.key.fromMe) return;
 
+        const remoteJid = msg.key.remoteJid || '';
+        
+        // Filtro estricto: Solo acepta mensajes que vengan de ese canal específico
+        if (remoteJid !== CANAL_NEXUS_JID) {
+            return; 
+        }
+
         const texto = msg.message.conversation || msg.message.extendedTextMessage?.text || msg.message.imageMessage?.caption || '';
         const patron = /[A-Z0-9]+-[A-Z0-9]+-[A-Z0-9]+|[A-Z0-9]{8,16}/gi;
         const codigos = texto.match(patron);
 
         if (codigos) {
+            console.log(`¡Código detectado en el canal de Nexus! Procesando rápidamente...`);
             for (let cod of codigos) {
                 await canjearFlexile(cod.replace(/-/g, ''), MI_ID_JUGADOR);
             }
@@ -114,7 +118,7 @@ async function canjearFlexile(codigo, idJugador) {
             await inputID.type(idJugador);
             const btnFinal = await page.$('button[type="submit"]');
             if (btnFinal) await btnFinal.click();
-            console.log(`Canje enviado para PIN: ${codigo}`);
+            console.log(`¡Canje enviado con éxito para el PIN: ${codigo}!`);
         }
     } catch (e) {
         console.error('Error en canje:', e.message);
