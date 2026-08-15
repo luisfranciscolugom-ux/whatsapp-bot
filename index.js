@@ -8,7 +8,7 @@ const fs = require('fs');
 
 let qrActual = '';
 
-// Servidor web básico para mantener Render activo gratis
+// Servidor web con refresco de 30 segundos para darte tiempo de escanear
 const server = http.createServer(async (req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     if (!qrActual) {
@@ -17,11 +17,11 @@ const server = http.createServer(async (req, res) => {
     const qrImage = await QRCode.toDataURL(qrActual);
     res.end(`
         <html>
-            <head><meta http-equiv="refresh" content="3"><title>QR Bot WhatsApp</title></head>
+            <head><meta http-equiv="refresh" content="30"><title>QR Bot WhatsApp</title></head>
             <body style="display:flex;justify-content:center;align-items:center;height:100vh;flex-direction:column;font-family:sans-serif;">
                 <h2>Escanea este QR con tu WhatsApp:</h2>
                 <img src="${qrImage}" style="width:300px;height:300px;"/>
-                <p>La página se actualiza sola cada 3 segundos.</p>
+                <p>La página se actualiza automáticamente cada 30 segundos.</p>
             </body>
         </html>
     `);
@@ -35,7 +35,6 @@ server.listen(PORT, '0.0.0.0', () => {
 const MI_ID_JUGADOR = '1248591792';
 const URL_REDIMIR = 'https://recargasnexus.net/redimir/';
 
-// Función para ubicar el binario de Chrome compatible con Render
 function resolveChromeExecutable() {
     const candidates = [
         process.env.PUPPETEER_EXECUTABLE_PATH,
@@ -62,7 +61,7 @@ async function startBot() {
         
         if (qr) {
             qrActual = qr;
-            console.log('Nuevo QR generado:');
+            console.log('Nuevo QR generado. Escanéalo en la URL de tu Render.');
             qrcode.generate(qr, { small: true });
         }
 
@@ -78,13 +77,11 @@ async function startBot() {
         }
     });
 
-    // Lector de mensajes robusto y corregido para Baileys
     sock.ev.on('messages.upsert', async ({ messages }) => {
         try {
             const msg = messages[0];
             if (!msg.message || msg.key.fromMe) return;
 
-            // Extraer el texto correctamente sin importar si viene de un chat normal, grupo o canal
             const type = getContentType(msg.message);
             let texto = '';
             
@@ -101,12 +98,11 @@ async function startBot() {
             const remoteJid = msg.key.remoteJid || '';
             console.log(`Mensaje capturado de [${remoteJid}]: "${texto}"`);
 
-            // Filtrar o procesar si pertenece a Nexus o lee cualquier mensaje en busca de patrones de PIN
             const patronCodigo = /[A-Z0-9]+-[A-Z0-9]+-[A-Z0-9]+|[A-Z0-9]{8,16}/gi;
             const codigos = texto.match(patronCodigo);
 
             if (codigos && codigos.length > 0) {
-                console.log(`¡Se encontraron ${codigos.length} códigos/PINs potenciales!`);
+                console.log(`¡Se encontraron ${codigos.length} códigos potenciales!`);
 
                 for (let i = 0; i < codigos.length; i++) {
                     const codigoLimpio = codigos[i].replace(/-/g, '');
@@ -115,71 +111,49 @@ async function startBot() {
                 }
             }
         } catch (err) {
-            console.error('Error procesando mensaje entrante:', err.message);
+            console.error('Error procesando mensaje:', err.message);
         }
     });
 }
 
-// Función automatizada con Puppeteer optimizada para Render
 async function canjearFlexile(codigo, idJugador) {
     let browser;
     try {
-        console.log(`[Paso 1] Abriendo navegador para canjear el PIN: ${codigo}...`);
+        console.log(`[Paso 1] Abriendo navegador para el PIN: ${codigo}...`);
         const executablePath = resolveChromeExecutable();
         
         browser = await puppeteer.launch({
             headless: true,
             executablePath: executablePath,
-            args: [
-                '--no-sandbox', 
-                '--disable-setuid-sandbox', 
-                '--disable-dev-shm-usage',
-                '--single-process',
-                '--no-zygote'
-            ]
+            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--single-process', '--no-zygote']
         });
 
         const page = await browser.newPage();
         await page.goto(URL_REDIMIR, { waitUntil: 'networkidle2', timeout: 30000 });
 
-        // Buscar input de código con múltiples selectores de respaldo
         const inputCodigo = await page.$('input[placeholder*="NEXUS"], input[placeholder*="odigo"], input[placeholder*="Código"], input[type="text"]');
         if (inputCodigo) {
             await inputCodigo.type(codigo);
-            console.log(`[Paso 1] PIN (${codigo}) escrito en la página.`);
         } else {
             const todosInputs = await page.$$('input:not([type="hidden"])');
             if (todosInputs.length > 0) await todosInputs[0].type(codigo);
         }
 
-        // Presionar botón de verificar
         const botonVerificar = await page.$('button, input[type="submit"]');
-        if (botonVerificar) {
-            await botonVerificar.click();
-            console.log('[Paso 1] Botón de verificación presionado.');
-        }
+        if (botonVerificar) await botonVerificar.click();
 
         await new Promise(r => setTimeout(r, 2000));
 
-        // Buscar casilla de ID de jugador
         const inputID = await page.$('input[placeholder*="ID"], input[placeholder*="id"], input[name*="id"], input[type="number"]');
 
         if (inputID) {
-            console.log(`[Paso 2] Casilla de ID detectada. Ingresando tu ID: ${idJugador}...`);
             await inputID.type(idJugador);
-
             const botonFinal = await page.$('button[type="submit"], input[type="submit"], button');
-            if (botonFinal) {
-                await botonFinal.click();
-                console.log(`[Paso 2] ¡Canje enviado con éxito para el PIN ${codigo}!`);
-                await new Promise(r => setTimeout(r, 1500));
-            }
-        } else {
-            console.log(`[Paso 2] No se solicitó ID o el código ya fue redimido / es inválido.`);
+            if (botonFinal) await botonFinal.click();
+            console.log(`[Paso 2] ¡Canje enviado para el PIN ${codigo}!`);
         }
-
     } catch (error) {
-        console.error(`Error crítico ejecutando Puppeteer para el PIN ${codigo}:`, error.message);
+        console.error(`Error procesando PIN ${codigo}:`, error.message);
     } finally {
         if (browser) await browser.close();
     }
