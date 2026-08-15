@@ -1,117 +1,77 @@
-const { makeWASocket, useMultiFileAuthState, DisconnectReason,getContentType } = require('@whiskeysockets/baileys');
+const { makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const http = require('http');
-const qrcode = require('qrcode-terminal');
-const QRCode = require('qrcode');
 const puppeteer = require('puppeteer');
 const fs = require('fs');
 
-let qrActual = '';
-
-// Servidor web con refresco de 30 segundos para darte tiempo de escanear
-const server = http.createServer(async (req, res) => {
-    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-    if (!qrActual) {
-        return res.end('<h2>¡Bot conectado correctamente! Si ya vinculaste, puedes cerrar esta pestaña.</h2>');
-    }
-    const qrImage = await QRCode.toDataURL(qrActual);
-    res.end(`
-        <html>
-            <head><meta http-equiv="refresh" content="30"><title>QR Bot WhatsApp</title></head>
-            <body style="display:flex;justify-content:center;align-items:center;height:100vh;flex-direction:column;font-family:sans-serif;">
-                <h2>Escanea este QR con tu WhatsApp:</h2>
-                <img src="${qrImage}" style="width:300px;height:300px;"/>
-                <p>La página se actualiza automáticamente cada 30 segundos.</p>
-            </body>
-        </html>
-    `);
+// Servidor web simple para mantener Render activo
+const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end('Bot activo: Escuchando mensajes de Recargas Nexus...');
 });
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, '0.0.0.0', () => {
-    console.log(`Servidor web escuchando en el puerto ${PORT}`);
+    console.log(`Servidor web activo en el puerto ${PORT}`);
 });
 
-const MI_ID_JUGADOR = '1248591792';
+// CONFIGURACIÓN PERSONALIZADA
+const MI_ID_JUGADOR = '1248591792'; 
 const URL_REDIMIR = 'https://recargasnexus.net/redimir/';
+const NUMERO_TELEFONO = '584126307409'; 
 
 function resolveChromeExecutable() {
-    const candidates = [
-        process.env.PUPPETEER_EXECUTABLE_PATH,
-        '/usr/bin/chromium',
-        '/usr/bin/chromium-browser',
-        '/usr/bin/google-chrome'
-    ].filter(Boolean);
-    return candidates.find(candidate => fs.existsSync(candidate)) || undefined;
+    return process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/google-chrome';
 }
 
 async function startBot() {
     const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
     
+    // Configurado como Mac para máxima compatibilidad
     const sock = makeWASocket({
         auth: state,
         logger: pino({ level: 'silent' }),
-        browser: ['Ubuntu', 'Chrome', '105.0.5195.125']
+        browser: ['Mac OS', 'Chrome', '116.0.5845.187']
     });
 
     sock.ev.on('creds.update', saveCreds);
 
-    sock.ev.on('connection.update', (update) => {
-        const { connection, lastDisconnect, qr } = update;
-        
-        if (qr) {
-            qrActual = qr;
-            console.log('Nuevo QR generado. Escanéalo en la URL de tu Render.');
-            qrcode.generate(qr, { small: true });
-        }
+    // Solicitar código de vinculación por número
+    if (!sock.authState.creds.registered) {
+        setTimeout(async () => {
+            try {
+                let codigo = await sock.requestPairingCode(NUMERO_TELEFONO);
+                console.log(`\n========================================`);
+                console.log(`TU CÓDIGO DE VINCULACIÓN: ${codigo}`);
+                console.log(`========================================\n`);
+            } catch (err) {
+                console.error('Error al pedir código:', err);
+            }
+        }, 5000);
+    }
 
+    sock.ev.on('connection.update', (update) => {
+        const { connection, lastDisconnect } = update;
         if (connection === 'close') {
             const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
-            console.log('Conexión cerrada. Reconectando...', shouldReconnect);
-            if (shouldReconnect) {
-                startBot();
-            }
+            if (shouldReconnect) startBot();
         } else if (connection === 'open') {
-            qrActual = '';
-            console.log('¡Bot conectado exitosamente y listo para cazar PINs de RECARGAS NEXUS!');
+            console.log('¡Bot conectado y vigilando PINs!');
         }
     });
 
     sock.ev.on('messages.upsert', async ({ messages }) => {
-        try {
-            const msg = messages[0];
-            if (!msg.message || msg.key.fromMe) return;
+        const msg = messages[0];
+        if (!msg.message || msg.key.fromMe) return;
 
-            const type = getContentType(msg.message);
-            let texto = '';
-            
-            if (type === 'conversation') {
-                texto = msg.message.conversation;
-            } else if (type === 'extendedTextMessage') {
-                texto = msg.message.extendedTextMessage?.text;
-            } else if (type === 'imageMessage' || type === 'videoMessage') {
-                texto = msg.message.imageMessage?.caption || msg.message.videoMessage?.caption || '';
+        const texto = msg.message.conversation || msg.message.extendedTextMessage?.text || msg.message.imageMessage?.caption || '';
+        const patron = /[A-Z0-9]+-[A-Z0-9]+-[A-Z0-9]+|[A-Z0-9]{8,16}/gi;
+        const codigos = texto.match(patron);
+
+        if (codigos) {
+            for (let cod of codigos) {
+                await canjearFlexile(cod.replace(/-/g, ''), MI_ID_JUGADOR);
             }
-
-            if (!texto) return;
-
-            const remoteJid = msg.key.remoteJid || '';
-            console.log(`Mensaje capturado de [${remoteJid}]: "${texto}"`);
-
-            const patronCodigo = /[A-Z0-9]+-[A-Z0-9]+-[A-Z0-9]+|[A-Z0-9]{8,16}/gi;
-            const codigos = texto.match(patronCodigo);
-
-            if (codigos && codigos.length > 0) {
-                console.log(`¡Se encontraron ${codigos.length} códigos potenciales!`);
-
-                for (let i = 0; i < codigos.length; i++) {
-                    const codigoLimpio = codigos[i].replace(/-/g, '');
-                    console.log(`--- [Código ${i + 1} de ${codigos.length}] Procesando PIN: ${codigoLimpio} ---`);
-                    await canjearFlexile(codigoLimpio, MI_ID_JUGADOR);
-                }
-            }
-        } catch (err) {
-            console.error('Error procesando mensaje:', err.message);
         }
     });
 }
@@ -119,41 +79,32 @@ async function startBot() {
 async function canjearFlexile(codigo, idJugador) {
     let browser;
     try {
-        console.log(`[Paso 1] Abriendo navegador para el PIN: ${codigo}...`);
-        const executablePath = resolveChromeExecutable();
-        
         browser = await puppeteer.launch({
             headless: true,
-            executablePath: executablePath,
+            executablePath: resolveChromeExecutable(),
             args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--single-process', '--no-zygote']
         });
 
         const page = await browser.newPage();
         await page.goto(URL_REDIMIR, { waitUntil: 'networkidle2', timeout: 30000 });
 
-        const inputCodigo = await page.$('input[placeholder*="NEXUS"], input[placeholder*="odigo"], input[placeholder*="Código"], input[type="text"]');
-        if (inputCodigo) {
-            await inputCodigo.type(codigo);
-        } else {
-            const todosInputs = await page.$$('input:not([type="hidden"])');
-            if (todosInputs.length > 0) await todosInputs[0].type(codigo);
-        }
+        const inputCodigo = await page.$('input[placeholder*="NEXUS"], input[placeholder*="odigo"], input[type="text"]');
+        if (inputCodigo) await inputCodigo.type(codigo);
 
-        const botonVerificar = await page.$('button, input[type="submit"]');
-        if (botonVerificar) await botonVerificar.click();
+        const boton = await page.$('button, input[type="submit"]');
+        if (boton) await boton.click();
 
         await new Promise(r => setTimeout(r, 2000));
 
-        const inputID = await page.$('input[placeholder*="ID"], input[placeholder*="id"], input[name*="id"], input[type="number"]');
-
+        const inputID = await page.$('input[placeholder*="ID"], input[name*="id"]');
         if (inputID) {
             await inputID.type(idJugador);
-            const botonFinal = await page.$('button[type="submit"], input[type="submit"], button');
+            const botonFinal = await page.$('button[type="submit"]');
             if (botonFinal) await botonFinal.click();
-            console.log(`[Paso 2] ¡Canje enviado para el PIN ${codigo}!`);
+            console.log(`Canje enviado para PIN: ${codigo}`);
         }
-    } catch (error) {
-        console.error(`Error procesando PIN ${codigo}:`, error.message);
+    } catch (e) {
+        console.error('Error en canje:', e.message);
     } finally {
         if (browser) await browser.close();
     }
