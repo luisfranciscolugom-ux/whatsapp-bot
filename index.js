@@ -22,9 +22,9 @@ async function startBot() {
         browser: ['Ubuntu', 'Chrome', '105.0.5195.125']
     });
 
-    sock.sock.ev.o('creds.update', saveCreds);
+    sock.ev.on('creds.update', saveCreds);
 
-    sock.sock.ev.o('connection.update', (update) => {
+    sock.ev.on('connection.update', (update) => {
         const { connection, lastDisconnect } = update;
         if (connection === 'close') {
             const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== 401;
